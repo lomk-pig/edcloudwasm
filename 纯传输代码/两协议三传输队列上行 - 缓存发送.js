@@ -74,12 +74,12 @@ const parseAuthString = (authParam) => {
     return {username, password, hostname, port};
 };
 const createConnect = (hostname, port, socket = connect({hostname, port})) => socket.opened.then(() => socket);
-const concurrentConnect = (hostname, port, _addrType, limit = concurrency) => {
+const concurrentConnect = (hostname, port, limit = concurrency) => {
     if (limit === 1) return createConnect(hostname, port);
     return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port)));
 };
 const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, addrBytes, limit) => {
-    const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, 0, limit);
+    const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, limit);
     const writer = socksSocket.writable.getWriter();
     const reader = socksSocket.readable.getReader();
     await writer.write(socks5Init);
@@ -109,7 +109,7 @@ const staticHeaders = `User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/5
 const encodedStaticHeaders = textEncoder.encode(staticHeaders);
 const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addrBytes, limit) => {
     const {username, password, hostname, port} = httpAuth;
-    const proxySocket = await concurrentConnect(hostname, port, 0, limit);
+    const proxySocket = await concurrentConnect(hostname, port, limit);
     const writer = proxySocket.writable.getWriter();
     const httpHost = binaryAddrToString(targetAddrType, addrBytes);
     let dynamicHeaders = `CONNECT ${httpHost}:${targetPortNum} HTTP/1.1\r\nHost: ${httpHost}:${targetPortNum}\r\n`;
@@ -266,12 +266,12 @@ const connectProxyIp = async (param, limit) => {
         return await Promise.any(connectionPromises);
     }
     const [host, port] = parseHostPort(param, 443);
-    return concurrentConnect(host, port, 0, limit);
+    return concurrentConnect(host, port, limit);
 };
 const strategyExecutorMap = new Map([
     [0, async ({addrType, port, addrBytes}) => {
         const hostname = binaryAddrToString(addrType, addrBytes);
-        return concurrentConnect(hostname, port, addrType);
+        return concurrentConnect(hostname, port);
     }],
     [1, async ({addrType, port, addrBytes}, param, limit) => {
         return connectViaSocksProxy(addrType, port, param, addrBytes, limit);

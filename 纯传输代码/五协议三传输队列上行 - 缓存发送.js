@@ -45,7 +45,6 @@ const maxChunkLen = 64 * 1024;        // 64KB
 const flushTime = 20;                 // 20ms
 // ---------------------------------------------------------------------------------
 /** TCPsocket并发获取，可提高tcp连接成功率*/
-const concurrentOnlyDomain = false;//只对域名并发开关
 /**- **警告**: snippets只能设置为1，worker最大支持6，超过6没意义*/
 let concurrency = 4;//socket获取并发数
 // ---------------------------------------------------------------------------------
@@ -142,20 +141,13 @@ const isIPv4 = (str) => {
     }
     return dots === 3 && partLen > 0 && !(partLen > 1 && head === 48);
 };
-const isDomainName = (str) => {
-    if (!concurrentOnlyDomain) return true;
-    const firstCode = str.charCodeAt(0);
-    if ((firstCode - 48) >>> 0 > 9) return firstCode !== 91;
-    return !isIPv4(str);
-};
 const createConnect = (hostname, port, socket = connect({hostname, port})) => socket.opened.then(() => socket);
-const concurrentConnect = (hostname, port, addrType, limit = concurrency) => {
-    if (limit === 1 || (concurrentOnlyDomain && addrType !== 3)) return createConnect(hostname, port);
+const concurrentConnect = (hostname, port, limit = concurrency) => {
+    if (limit === 1) return createConnect(hostname, port);
     return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port)));
 };
 const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, addrBytes, limit) => {
-    const addrType = isDomainName(socksAuth.hostname) ? 3 : 0;
-    const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, addrType, limit);
+    const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, limit);
     const writer = socksSocket.writable.getWriter();
     const reader = socksSocket.readable.getReader();
     await writer.write(socks5Init);
@@ -185,8 +177,7 @@ const staticHeaders = `User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/5
 const encodedStaticHeaders = textEncoder.encode(staticHeaders);
 const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addrBytes, limit) => {
     const {username, password, hostname, port} = httpAuth;
-    const addrType = isDomainName(hostname) ? 3 : 0;
-    const proxySocket = await concurrentConnect(hostname, port, addrType, limit);
+    const proxySocket = await concurrentConnect(hostname, port, limit);
     const writer = proxySocket.writable.getWriter();
     const httpHost = binaryAddrToString(targetAddrType, addrBytes);
     let dynamicHeaders = `CONNECT ${httpHost}:${targetPortNum} HTTP/1.1\r\nHost: ${httpHost}:${targetPortNum}\r\n`;
@@ -560,16 +551,16 @@ const addrTypeIs = (hostname) => {
 };
 const connectNat64 = async (addrType, port, nat64Auth, addrBytes, proxyAll, limit, isHttp) => {
     const nat64Prefixes = nat64Auth.charCodeAt(0) === 91 ? nat64Auth.slice(1, -1) : nat64Auth;
-    if (!proxyAll) return concurrentConnect(`[${nat64Prefixes}6815:3598]`, port, 4, limit);
+    if (!proxyAll) return concurrentConnect(`[${nat64Prefixes}6815:3598]`, port, limit);
     const hostname = binaryAddrToString(addrType, addrBytes);
     if (isHttp) addrType = addrTypeIs(hostname);
     if (addrType === 3) {
         const answer = await concurrentDnsResolve(hostname, 'A');
         const aRecord = answer?.find(record => record.type === 1);
-        return aRecord ? concurrentConnect(ipv4ToNat64Ipv6(aRecord.data, nat64Prefixes), port, 4, limit) : null;
+        return aRecord ? concurrentConnect(ipv4ToNat64Ipv6(aRecord.data, nat64Prefixes), port, limit) : null;
     }
-    if (addrType === 1) return concurrentConnect(ipv4ToNat64Ipv6(hostname, nat64Prefixes), port, 4, limit);
-    return concurrentConnect(hostname, port, 4, limit);
+    if (addrType === 1) return concurrentConnect(ipv4ToNat64Ipv6(hostname, nat64Prefixes), port, limit);
+    return concurrentConnect(hostname, port, limit);
 };
 const williamResult = async (william) => {
     const answer = await concurrentDnsResolve(william, 'TXT');
@@ -607,14 +598,12 @@ const connectProxyIp = async (param, limit) => {
         return await Promise.any(connectionPromises);
     }
     const [host, port] = parseHostPort(param, 443);
-    const addrType = isDomainName(host) ? 3 : 0;
-    return concurrentConnect(host, port, addrType, limit);
+    return concurrentConnect(host, port, limit);
 };
 const strategyExecutorMap = new Map([
-    [0, async ({addrType, port, addrBytes, isHttp}) => {
+    [0, async ({addrType, port, addrBytes}) => {
         const hostname = binaryAddrToString(addrType, addrBytes);
-        if (isHttp && concurrentOnlyDomain) addrType = addrTypeIs(hostname);
-        return concurrentConnect(hostname, port, addrType);
+        return concurrentConnect(hostname, port);
     }],
     [1, async ({addrType, port, addrBytes}, param, limit) => {
         return connectViaSocksProxy(addrType, port, param, addrBytes, limit);
